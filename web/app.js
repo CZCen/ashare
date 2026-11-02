@@ -182,6 +182,7 @@ async function boardView(id) {
 // ---------- 个股 ----------
 const WL = { get: () => JSON.parse(localStorage.getItem('wl') || '[]'), set: v => localStorage.setItem('wl', JSON.stringify(v)) };
 async function stockView(code) {
+  loadLwc().catch(() => {}); // 与行情并行预取图表库，不阻塞页面
   setTab(''); header('个股', true, ''); V.innerHTML = '<div class="empty">加载中…</div>';
   const [qm, sx, fx] = await Promise.all([liveQuotes([code]), getJSON('data/stocks.json', 300000).catch(() => null), getJSON('data/features.json', 300000).catch(() => null)]);
   const x = qm[code]; const si = sx ? sx.rows.find(r => r[0] === code) : null; const fr = fx ? fx.rows.find(r => r[0] === code) : null;
@@ -207,6 +208,32 @@ async function stockView(code) {
   V.querySelectorAll('[data-c]').forEach(b => b.onclick = () => { V.querySelectorAll('[data-c]').forEach(z => z.classList.toggle('on', z === b)); drawChart(code, b.dataset.c, q.prev); });
   drawChart(code, 'min', q.prev);
 }
+
+// ---------- 图表库按需加载：首屏不加载 lwc.js，打开个股图表时才注入 ----------
+const LWC_SRC = 'lwc.js';
+let lwcEl = null, lwcFailed = false;
+function loadLwc(ms = 15000) {
+  return new Promise((res, rej) => {
+    if (window.LightweightCharts) return res();
+    if (!lwcEl || lwcFailed) { if (lwcEl) lwcEl.remove(); lwcFailed = false; lwcEl = document.createElement('script'); lwcEl.src = LWC_SRC; lwcEl.async = true;
+      lwcEl.addEventListener('error', () => { lwcFailed = true; }); document.head.appendChild(lwcEl); }
+    const to = setTimeout(() => rej(new Error('timeout')), ms);
+    lwcEl.addEventListener('load', () => { clearTimeout(to); window.LightweightCharts ? res() : rej(new Error('load')); }, { once: true });
+    lwcEl.addEventListener('error', () => { clearTimeout(to); rej(new Error('error')); }, { once: true });
+  });
+}
+async function chartReady(el, my, redraw) { // 成功返回 true；超时/失败显示重试，稍后加载成功会自动重画
+  if (window.LightweightCharts) return true;
+  el.innerHTML = '<div class="empty">图表加载中…</div>';
+  try { await loadLwc(); return my === drawSeq; }
+  catch (e) {
+    if (my !== drawSeq) return false;
+    el.innerHTML = `<div class="empty">图表组件${e.message === 'timeout' ? '加载超时（网络较慢）' : '加载失败'}<br><button class="btn" id="lwcRetry" style="margin-top:8px">重试</button></div>`;
+    const b = el.querySelector('#lwcRetry'); if (b) b.onclick = () => redraw();
+    if (lwcEl && !lwcFailed) lwcEl.addEventListener('load', () => { if (my === drawSeq && window.LightweightCharts) redraw(); }, { once: true });
+    return false;
+  }
+}
 let chart = null, subChart = null;
 const KCFG = { sub: localStorage.getItem('ksub') || 'MACD', boll: localStorage.getItem('kboll') === '1' };
 const K_FETCH = 640, K_SHOW = 250, K_VIEW = 120; // 拉 640 根前复权日K做预热，图上放最近 250 根，初始可见 120 根（可左右拖动/缩放）
@@ -222,7 +249,8 @@ function mkChart(el, opt, isSub) {
 }
 let drawSeq = 0;
 async function drawChart(code, kind, prev) {
-  const my = ++drawSeq; const el = $('#ch'); el.innerHTML = ''; $('#leg').textContent = '';
+  const my = ++drawSeq; const el = $('#ch'); $('#leg').textContent = '';
+  if (kind !== 'day') { if (!(await chartReady(el, my, () => drawChart(code, kind, prev)))) return; el.innerHTML = ''; }
   try {
     if (kind === 'min') {
       const j = await ifzq('/appstock/app/minute/query?code=' + code, 'mq'); if (my !== drawSeq) return; const dd = j.data[code].data;
@@ -334,6 +362,34 @@ async function drawDayK(code, el, my) {
   if (!all.length) throw new Error('无日K数据');
   const I = IND.all(all, { code, name: (document.querySelector('#title') || {}).textContent || '' }); const N = all.length, s0 = Math.max(0, N - K_SHOW); const bars = all.slice(s0);
   const T = i => all[i].t; const pts = (arr) => bars.map((b, k) => arr[s0 + k] == null ? { time: b.t } : { time: b.t, value: arr[s0 + k] });
+  const inView = i => i >= s0;
+  const divs = I.div.filter(x => inView(x.a) && x.confirm <= N - 1);
+  const sub = KCFG.sub;
+  // 先显示不依赖图表库的部分：切换按钮、图例、最新指标值
+  // 副图
+  const sw = $('#subwrap');
+  sw.innerHTML = `<div class="seg small" style="margin:6px 4px 2px">${['VOL', 'MACD', 'KDJ', 'RSI'].map(x => `<button data-sub="${x}" class="${KCFG.sub === x ? 'on' : ''}">${x}</button>`).join('')}<button data-boll class="${KCFG.boll ? 'on' : ''}">BOLL</button></div>
+    <div id="leg2" class="muted" style="padding:2px 6px;min-height:16px"></div><div id="sub" style="height:150px"></div>
+    <div class="muted" id="indsum" style="padding:6px;line-height:1.6"></div>`;
+  sw.querySelectorAll('[data-sub]').forEach(b => b.onclick = () => { KCFG.sub = b.dataset.sub; localStorage.setItem('ksub', KCFG.sub); drawDayK(code, el, ++drawSeq); });
+  sw.querySelector('[data-boll]').onclick = () => { KCFG.boll = !KCFG.boll; localStorage.setItem('kboll', KCFG.boll ? '1' : '0'); drawDayK(code, el, ++drawSeq); };
+  // 图例
+  const span = (col, txt) => `<span style="color:${col}">${txt}</span>`;
+  const legMain = i => `${all[i].t} 收${fx2(all[i].c)} ` + ['ma5', 'ma10', 'ma20', 'ma60'].map(k => span(COL[k], k.toUpperCase() + ' ' + fx2(I[k][i]))).join(' ')
+    + (KCFG.boll ? ' ' + span(COL.boll, `BOLL ${fx2(I.boll_up[i])}/${fx2(I.boll_mid[i])}/${fx2(I.boll_low[i])}`) : '');
+  const legSub = i => sub === 'VOL' ? `VOL ${Math.round(all[i].v)} ${span(COL.ma5, 'MA5 ' + Math.round(I.vma5[i] || 0))} ${span(COL.ma10, 'MA10 ' + Math.round(I.vma10[i] || 0))}`
+    : sub === 'MACD' ? `MACD(12,26,9) ${span(dark() ? '#ddd' : COL.dif, 'DIF ' + fx2(I.dif[i], 3))} ${span(COL.dea, 'DEA ' + fx2(I.dea[i], 3))} <span class="${cls(I.macd[i])}">MACD ${fx2(I.macd[i], 3)}</span>`
+    : sub === 'KDJ' ? `KDJ(9,3,3) ${span(COL.k, 'K ' + fx2(I.k[i]))} ${span(COL.d, 'D ' + fx2(I.d[i]))} ${span(COL.j, 'J ' + fx2(I.j[i]))}`
+    : `RSI ${span(COL.r6, '6: ' + fx2(I.rsi6[i]))} ${span(COL.r12, '12: ' + fx2(I.rsi12[i]))} ${span(COL.r24, '24: ' + fx2(I.rsi24[i]))}`;
+  const L = N - 1; $('#leg').innerHTML = legMain(L); $('#leg2').innerHTML = legSub(L);
+  const recent = I.div.filter(x => x.b >= N - 60 && x.confirm <= L);
+  $('#indsum').innerHTML = `<b>最新（${all[L].t}）</b> MACD ${fx2(I.dif[L], 3)}/${fx2(I.dea[L], 3)}/${fx2(I.macd[L], 3)} · KDJ ${fx2(I.k[L])}/${fx2(I.d[L])}/${fx2(I.j[L])} · RSI ${fx2(I.rsi6[L])}/${fx2(I.rsi12[L])}/${fx2(I.rsi24[L])} · BOLL ${fx2(I.boll_up[L])}/${fx2(I.boll_mid[L])}/${fx2(I.boll_low[L])}<br>
+    近 60 根背离：${recent.length ? recent.map(x => `${x.type === 'top' ? span(COL.top, '顶背离') : span(COL.bot, '底背离')} ${T(x.a).slice(5)}→${T(x.b).slice(5)}`).join('，') : '无'}<br>
+    ${span('#e0262f', '▼')} 超买（RSI6≥80 且 J≥100）${span('#11a05a', '▲')} 超卖（RSI6≤20 且 J≤0），连续只标首日；一字涨停不标超买、一字跌停不标超卖。信号滞后确认（5根K线）。<br>
+    日K为腾讯前复权，取 ${N} 根用于指标预热，显示最近 ${bars.length} 根。${N < 60 ? '<b>K线不足，部分指标不可靠。</b>' : ''}`;
+  $('#sub').innerHTML = '';
+  if (!(await chartReady(el, my, () => drawDayK(code, el, ++drawSeq)))) return;
+  el.innerHTML = '';
   const c = mkChart(el, { rightOffset: 3 });
   const cs = c.addCandlestickSeries({ upColor: '#e0262f', downColor: '#11a05a', borderUpColor: '#e0262f', borderDownColor: '#11a05a', wickUpColor: '#e0262f', wickDownColor: '#11a05a', priceLineVisible: false });
   cs.setData(bars.map(b => ({ time: b.t, open: b.o, high: b.h, low: b.l, close: b.c })));
@@ -341,8 +397,6 @@ async function drawDayK(code, el, my) {
   for (const k of ['ma5', 'ma10', 'ma20', 'ma60']) line(c, I[k], COL[k]);
   if (KCFG.boll) { line(c, I.boll_up, COL.boll, 1, { lineStyle: 2 }); line(c, I.boll_low, COL.boll, 1, { lineStyle: 2 }); }
   // 背离连线 + 标记；超买/超卖小三角
-  const inView = i => i >= s0;
-  const divs = I.div.filter(x => inView(x.a) && x.confirm <= N - 1);
   const mk = [];
   for (const x of divs) {
     const top = x.type === 'top'; const col = top ? COL.top : COL.bot;
@@ -355,14 +409,7 @@ async function drawDayK(code, el, my) {
     : { time: T(x.i), position: 'belowBar', color: '#11a05a', shape: 'arrowUp', size: 0.6, text: '' });
   mk.sort((a, b) => a.time < b.time ? -1 : a.time > b.time ? 1 : 0); cs.setMarkers(mk);
   c.timeScale().setVisibleLogicalRange({ from: Math.max(0, bars.length - K_VIEW), to: bars.length + 2 });
-  // 副图
-  const sw = $('#subwrap');
-  sw.innerHTML = `<div class="seg small" style="margin:6px 4px 2px">${['VOL', 'MACD', 'KDJ', 'RSI'].map(x => `<button data-sub="${x}" class="${KCFG.sub === x ? 'on' : ''}">${x}</button>`).join('')}<button data-boll class="${KCFG.boll ? 'on' : ''}">BOLL</button></div>
-    <div id="leg2" class="muted" style="padding:2px 6px;min-height:16px"></div><div id="sub" style="height:150px"></div>
-    <div class="muted" id="indsum" style="padding:6px;line-height:1.6"></div>`;
-  sw.querySelectorAll('[data-sub]').forEach(b => b.onclick = () => { KCFG.sub = b.dataset.sub; localStorage.setItem('ksub', KCFG.sub); drawDayK(code, el, ++drawSeq); });
-  sw.querySelector('[data-boll]').onclick = () => { KCFG.boll = !KCFG.boll; localStorage.setItem('kboll', KCFG.boll ? '1' : '0'); drawDayK(code, el, ++drawSeq); };
-  const sc = mkChart($('#sub'), { visible: true }, true); const sub = KCFG.sub;
+  const sc = mkChart($('#sub'), { visible: true }, true);
   const hist = (arr, colorFn) => { const s = sc.addHistogramSeries({ priceLineVisible: false, lastValueVisible: false, priceFormat: sub === 'VOL' ? { type: 'volume' } : { type: 'price', precision: 3, minMove: 0.001 } });
     s.setData(bars.map((b, k) => { const v = arr[s0 + k]; return v == null ? { time: b.t } : { time: b.t, value: v, color: colorFn(v, s0 + k) }; })); return s; };
   if (sub === 'VOL') { hist(all.map(b => b.v), (v, i) => all[i].c >= all[i].o ? 'rgba(224,38,47,.55)' : 'rgba(17,160,90,.55)'); line(sc, I.vma5, COL.ma5); line(sc, I.vma10, COL.ma10); }
@@ -380,21 +427,7 @@ async function drawDayK(code, el, my) {
   const vr = { from: Math.max(0, bars.length - K_VIEW), to: bars.length + 2 };
   const applyVr = () => { lock = true; c.timeScale().setVisibleLogicalRange(vr); sc.timeScale().setVisibleLogicalRange(vr); lock = false; };
   applyVr(); requestAnimationFrame(applyVr);
-  // 图例
-  const span = (col, txt) => `<span style="color:${col}">${txt}</span>`;
-  const legMain = i => `${all[i].t} 收${fx2(all[i].c)} ` + ['ma5', 'ma10', 'ma20', 'ma60'].map(k => span(COL[k], k.toUpperCase() + ' ' + fx2(I[k][i]))).join(' ')
-    + (KCFG.boll ? ' ' + span(COL.boll, `BOLL ${fx2(I.boll_up[i])}/${fx2(I.boll_mid[i])}/${fx2(I.boll_low[i])}`) : '');
-  const legSub = i => sub === 'VOL' ? `VOL ${Math.round(all[i].v)} ${span(COL.ma5, 'MA5 ' + Math.round(I.vma5[i] || 0))} ${span(COL.ma10, 'MA10 ' + Math.round(I.vma10[i] || 0))}`
-    : sub === 'MACD' ? `MACD(12,26,9) ${span(dark() ? '#ddd' : COL.dif, 'DIF ' + fx2(I.dif[i], 3))} ${span(COL.dea, 'DEA ' + fx2(I.dea[i], 3))} <span class="${cls(I.macd[i])}">MACD ${fx2(I.macd[i], 3)}</span>`
-    : sub === 'KDJ' ? `KDJ(9,3,3) ${span(COL.k, 'K ' + fx2(I.k[i]))} ${span(COL.d, 'D ' + fx2(I.d[i]))} ${span(COL.j, 'J ' + fx2(I.j[i]))}`
-    : `RSI ${span(COL.r6, '6: ' + fx2(I.rsi6[i]))} ${span(COL.r12, '12: ' + fx2(I.rsi12[i]))} ${span(COL.r24, '24: ' + fx2(I.rsi24[i]))}`;
-  const L = N - 1; $('#leg').innerHTML = legMain(L); $('#leg2').innerHTML = legSub(L);
   const idxOf = t => { for (let i = N - 1; i >= 0; i--) if (all[i].t === t) return i; return L; };
   const onMove = p => { const i = p && p.time ? idxOf(p.time) : L; $('#leg').innerHTML = legMain(i); $('#leg2').innerHTML = legSub(i); };
   c.subscribeCrosshairMove(onMove); sc.subscribeCrosshairMove(onMove);
-  const recent = I.div.filter(x => x.b >= N - 60 && x.confirm <= L);
-  $('#indsum').innerHTML = `<b>最新（${all[L].t}）</b> MACD ${fx2(I.dif[L], 3)}/${fx2(I.dea[L], 3)}/${fx2(I.macd[L], 3)} · KDJ ${fx2(I.k[L])}/${fx2(I.d[L])}/${fx2(I.j[L])} · RSI ${fx2(I.rsi6[L])}/${fx2(I.rsi12[L])}/${fx2(I.rsi24[L])} · BOLL ${fx2(I.boll_up[L])}/${fx2(I.boll_mid[L])}/${fx2(I.boll_low[L])}<br>
-    近 60 根背离：${recent.length ? recent.map(x => `${x.type === 'top' ? span(COL.top, '顶背离') : span(COL.bot, '底背离')} ${T(x.a).slice(5)}→${T(x.b).slice(5)}`).join('，') : '无'}<br>
-    ${span('#e0262f', '▼')} 超买（RSI6≥80 且 J≥100）${span('#11a05a', '▲')} 超卖（RSI6≤20 且 J≤0），连续只标首日；一字涨停不标超买、一字跌停不标超卖。信号滞后确认（5根K线）。<br>
-    日K为腾讯前复权，取 ${N} 根用于指标预热，显示最近 ${bars.length} 根。${N < 60 ? '<b>K线不足，部分指标不可靠。</b>' : ''}`;
 }
