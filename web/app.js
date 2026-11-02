@@ -200,27 +200,32 @@ async function stockView(code) {
     <div><small>流通市值</small>${q.fmv ? q.fmv.toFixed(0) + '亿' : '--'}</div><div><small>主力净流入</small>${mf == null ? '暂无' : wan(mf)}</div><div><small>连板</small>${lb}</div></div>
     ${ztd.length ? `<div class="muted" style="margin-top:6px">近期涨停：${ztd.slice(-10).join('、')}</div>` : ''}${zbd.length ? `<div class="muted">近期炸板：${zbd.slice(-10).join('、')}</div>` : ''}</div>
   <div class="seg small"><button data-c="min" class="on">分时</button><button data-c="day">日K</button></div>
-  <div class="card" style="padding:4px"><div id="leg" class="muted" style="padding:2px 6px;min-height:16px"></div><div class="chart" id="ch"></div></div>
+  <div class="card" style="padding:4px"><div id="leg" class="muted" style="padding:2px 6px;min-height:16px"></div><div class="chart" id="ch"></div><div id="subwrap"></div></div>
   <div class="card"><div class="sec" style="margin-top:0">所属板块</div>${bds.map(b => `<a class="btn" style="display:inline-block;margin:3px" href="#/board/${b[0]}">${esc(b[1])}</a>`).join('') || '<span class="muted">无</span>'}</div>
   <p class="muted">主力净流入为新浪口径（${sx ? sx.ts.slice(5, 16) : '--'}）。行情、分时、日K（前复权）来自腾讯。</p>`;
   $('#wlb').onclick = () => { let w = WL.get(); const on = w.includes(code); w = on ? w.filter(c => c !== code) : [...w, code]; WL.set(w); $('#wlb').textContent = on ? '+ 自选' : '已自选'; $('#wlb').classList.toggle('fill', on); };
   V.querySelectorAll('[data-c]').forEach(b => b.onclick = () => { V.querySelectorAll('[data-c]').forEach(z => z.classList.toggle('on', z === b)); drawChart(code, b.dataset.c, q.prev); });
   drawChart(code, 'min', q.prev);
 }
-let chart = null;
+let chart = null, subChart = null;
+const KCFG = { sub: localStorage.getItem('ksub') || 'MACD', boll: localStorage.getItem('kboll') === '1' };
+const K_FETCH = 640, K_SHOW = 250, K_VIEW = 120; // 拉 640 根前复权日K做预热，图上放最近 250 根，初始可见 120 根（可左右拖动/缩放）
 const dark = () => matchMedia('(prefers-color-scheme: dark)').matches;
-function mkChart(el, opt) {
-  if (chart) { chart.remove(); chart = null; }
-  chart = LightweightCharts.createChart(el, { width: el.clientWidth, height: el.clientHeight, layout: { background: { color: 'transparent' }, textColor: dark() ? '#aaa' : '#555', fontSize: 11 },
+function mkChart(el, opt, isSub) {
+  if (!isSub) { if (chart) { chart.remove(); chart = null; } if (subChart) { subChart.remove(); subChart = null; } }
+  const c = LightweightCharts.createChart(el, { width: el.clientWidth, height: el.clientHeight, layout: { background: { color: 'transparent' }, textColor: dark() ? '#aaa' : '#555', fontSize: 11 },
     grid: { vertLines: { color: dark() ? '#222' : '#eee' }, horzLines: { color: dark() ? '#222' : '#eee' } }, rightPriceScale: { borderVisible: false }, timeScale: { borderVisible: false, ...(opt || {}) },
     handleScale: { axisPressedMouseMove: false }, localization: { locale: 'zh-CN' } });
-  return chart;
+  c.priceScale('right').applyOptions({ minimumWidth: 58 });
+  if (isSub) subChart = c; else chart = c;
+  return c;
 }
+let drawSeq = 0;
 async function drawChart(code, kind, prev) {
-  const el = $('#ch'); el.innerHTML = ''; $('#leg').textContent = '';
+  const my = ++drawSeq; const el = $('#ch'); el.innerHTML = ''; $('#leg').textContent = '';
   try {
     if (kind === 'min') {
-      const j = await ifzq('/appstock/app/minute/query?code=' + code, 'mq'); const dd = j.data[code].data;
+      const j = await ifzq('/appstock/app/minute/query?code=' + code, 'mq'); if (my !== drawSeq) return; const dd = j.data[code].data;
       const ymd = dd.date; const base = Date.UTC(+ymd.slice(0, 4), +ymd.slice(4, 6) - 1, +ymd.slice(6, 8)) / 1000;
       let pv = 0, pa = 0; const pts = dd.data.map(l => { const [hm, p, cv, ca] = l.split(' '); const o = { t: base + (+hm.slice(0, 2)) * 3600 + (+hm.slice(2)) * 60, p: +p, v: +cv - pv, a: +ca - pa }; pv = +cv; pa = +ca; return o; });
       const c = mkChart(el, { timeVisible: true, secondsVisible: false });
@@ -232,25 +237,9 @@ async function drawChart(code, kind, prev) {
       vs.setData(pts.map((p, i) => ({ time: p.t, value: p.v, color: (i && p.p < pts[i - 1].p) ? 'rgba(17,160,90,.6)' : 'rgba(224,38,47,.6)' })));
       c.timeScale().fitContent();
       $('#leg').innerHTML = `分时 ${ymd.slice(0, 4)}-${ymd.slice(4, 6)}-${ymd.slice(6)} · <span style="color:#3a7bd5">价格</span> <span style="color:#e0a000">均价</span>`;
+      $('#subwrap').innerHTML = '';
     } else {
-      const j = await ifzq(`/appstock/app/fqkline/get?param=${code},day,,,250,qfq`, 'kq'); const dd = j.data[code];
-      const k = (dd.qfqday || dd.day || []).map(b => ({ t: b[0], o: +b[1], c: +b[2], h: +b[3], l: +b[4], v: +b[5] }));
-      if (k.length < 30 && code.startsWith('bj')) $('#leg').textContent = '北交所新代码日K历史有限';
-      const c = mkChart(el);
-      const cs = c.addCandlestickSeries({ upColor: '#e0262f', downColor: '#11a05a', borderUpColor: '#e0262f', borderDownColor: '#11a05a', wickUpColor: '#e0262f', wickDownColor: '#11a05a' });
-      cs.setData(k.map(b => ({ time: b.t, open: b.o, high: b.h, low: b.l, close: b.c })));
-      const ma = (n, col) => { const s = c.addLineSeries({ color: col, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
-        const out = []; for (let i = n - 1; i < k.length; i++) { let t = 0; for (let j = i - n + 1; j <= i; j++) t += k[j].c; out.push({ time: k[i].t, value: +(t / n).toFixed(3) }); } s.setData(out); return out; };
-      const m5 = ma(5, '#e0a000'), m10 = ma(10, '#3a7bd5'), m20 = ma(20, '#b04ad5');
-      const vs = c.addHistogramSeries({ priceScaleId: 'v', priceFormat: { type: 'volume' }, lastValueVisible: false, priceLineVisible: false }); c.priceScale('v').applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
-      vs.setData(k.map(b => ({ time: b.t, value: b.v, color: b.c >= b.o ? 'rgba(224,38,47,.5)' : 'rgba(17,160,90,.5)' })));
-      c.timeScale().setVisibleLogicalRange({ from: Math.max(0, k.length - 80), to: k.length });
-      const last = a => a.length ? a[a.length - 1].value.toFixed(2) : '--';
-      const leg = (a, b, d, t) => `${t} <span style="color:#e0a000">MA5 ${a}</span> <span style="color:#3a7bd5">MA10 ${b}</span> <span style="color:#b04ad5">MA20 ${d}</span>`;
-      const def = () => leg(last(m5), last(m10), last(m20), `日K(${k.length}日,前复权)`); $('#leg').innerHTML = def();
-      c.subscribeCrosshairMove(p => { if (!p.time) { $('#leg').innerHTML = def(); return; }
-        const g = a => (a.find(x => x.time === p.time)?.value ?? NaN).toFixed(2); const b = k.find(x => x.t === p.time);
-        $('#leg').innerHTML = leg(g(m5), g(m10), g(m20), `${p.time} 收${b?.c}`); });
+      await drawDayK(code, el, my);
     }
   } catch (e) { el.innerHTML = '<div class="empty">图表加载失败（' + esc(e.message) + '）</div>'; }
 }
@@ -321,7 +310,7 @@ async function watchView() {
 let cur = '';
 async function route() {
   if (cur) state.scroll[cur] = window.scrollY;
-  const h = location.hash.replace(/^#/, '') || '/'; clearInterval(timer); if (chart) { chart.remove(); chart = null; }
+  const h = location.hash.replace(/^#/, '') || '/'; clearInterval(timer); if (chart) { chart.remove(); chart = null; } if (subChart) { subChart.remove(); subChart = null; }
   let m;
   try {
     if (h === '/') { cur = 'home'; await home(); }
@@ -334,3 +323,78 @@ async function route() {
 window.addEventListener('hashchange', route);
 route();
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+
+// ---------- v1.1 日K + 技术指标 ----------
+const fx2 = (v, p = 2) => v == null || isNaN(v) ? '--' : (+v).toFixed(p);
+const COL = { ma5: '#e0a000', ma10: '#3a7bd5', ma20: '#b04ad5', ma60: '#1aa3a3', boll: '#8a6d3b', dif: '#555', dea: '#e0a000', k: '#e0a000', d: '#3a7bd5', j: '#b04ad5', r6: '#e0a000', r12: '#3a7bd5', r24: '#b04ad5', top: '#11a05a', bot: '#e0262f' };
+async function drawDayK(code, el, my) {
+  if (my === undefined) my = ++drawSeq;
+  const j = await ifzq(`/appstock/app/fqkline/get?param=${code},day,,,${K_FETCH},qfq`, 'kq'); if (my !== drawSeq) return; const dd = j.data[code];
+  const all = (dd.qfqday || dd.day || []).map(b => ({ t: b[0], o: +b[1], c: +b[2], h: +b[3], l: +b[4], v: +b[5] }));
+  if (!all.length) throw new Error('无日K数据');
+  const I = IND.all(all); const N = all.length, s0 = Math.max(0, N - K_SHOW); const bars = all.slice(s0);
+  const T = i => all[i].t; const pts = (arr) => bars.map((b, k) => arr[s0 + k] == null ? { time: b.t } : { time: b.t, value: arr[s0 + k] });
+  const c = mkChart(el, { rightOffset: 3 });
+  const cs = c.addCandlestickSeries({ upColor: '#e0262f', downColor: '#11a05a', borderUpColor: '#e0262f', borderDownColor: '#11a05a', wickUpColor: '#e0262f', wickDownColor: '#11a05a', priceLineVisible: false });
+  cs.setData(bars.map(b => ({ time: b.t, open: b.o, high: b.h, low: b.l, close: b.c })));
+  const line = (ch, arr, color, w = 1, extra) => { const s = ch.addLineSeries({ color, lineWidth: w, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, ...(extra || {}) }); s.setData(pts(arr)); return s; };
+  for (const k of ['ma5', 'ma10', 'ma20', 'ma60']) line(c, I[k], COL[k]);
+  if (KCFG.boll) { line(c, I.boll_up, COL.boll, 1, { lineStyle: 2 }); line(c, I.boll_low, COL.boll, 1, { lineStyle: 2 }); }
+  // 背离连线 + 标记；超买/超卖小三角
+  const inView = i => i >= s0;
+  const divs = I.div.filter(x => inView(x.a) && x.confirm <= N - 1);
+  const mk = [];
+  for (const x of divs) {
+    const top = x.type === 'top'; const col = top ? COL.top : COL.bot;
+    const s = c.addLineSeries({ color: col, lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+    s.setData([{ time: T(x.a), value: top ? all[x.a].h : all[x.a].l }, { time: T(x.b), value: top ? all[x.b].h : all[x.b].l }]);
+    mk.push({ time: T(x.b), position: top ? 'aboveBar' : 'belowBar', color: col, shape: 'circle', size: 0.4, text: top ? '顶背离' : '底背离' });
+  }
+  for (const x of I.ext.filter(x => inView(x.i))) mk.push(x.type === 'overbought'
+    ? { time: T(x.i), position: 'aboveBar', color: '#e0262f', shape: 'arrowDown', size: 0.6, text: '' }
+    : { time: T(x.i), position: 'belowBar', color: '#11a05a', shape: 'arrowUp', size: 0.6, text: '' });
+  mk.sort((a, b) => a.time < b.time ? -1 : a.time > b.time ? 1 : 0); cs.setMarkers(mk);
+  c.timeScale().setVisibleLogicalRange({ from: Math.max(0, bars.length - K_VIEW), to: bars.length + 2 });
+  // 副图
+  const sw = $('#subwrap');
+  sw.innerHTML = `<div class="seg small" style="margin:6px 4px 2px">${['VOL', 'MACD', 'KDJ', 'RSI'].map(x => `<button data-sub="${x}" class="${KCFG.sub === x ? 'on' : ''}">${x}</button>`).join('')}<button data-boll class="${KCFG.boll ? 'on' : ''}">BOLL</button></div>
+    <div id="leg2" class="muted" style="padding:2px 6px;min-height:16px"></div><div id="sub" style="height:150px"></div>
+    <div class="muted" id="indsum" style="padding:6px;line-height:1.6"></div>`;
+  sw.querySelectorAll('[data-sub]').forEach(b => b.onclick = () => { KCFG.sub = b.dataset.sub; localStorage.setItem('ksub', KCFG.sub); drawDayK(code, el, ++drawSeq); });
+  sw.querySelector('[data-boll]').onclick = () => { KCFG.boll = !KCFG.boll; localStorage.setItem('kboll', KCFG.boll ? '1' : '0'); drawDayK(code, el, ++drawSeq); };
+  const sc = mkChart($('#sub'), { visible: true }, true); const sub = KCFG.sub;
+  const hist = (arr, colorFn) => { const s = sc.addHistogramSeries({ priceLineVisible: false, lastValueVisible: false, priceFormat: sub === 'VOL' ? { type: 'volume' } : { type: 'price', precision: 3, minMove: 0.001 } });
+    s.setData(bars.map((b, k) => { const v = arr[s0 + k]; return v == null ? { time: b.t } : { time: b.t, value: v, color: colorFn(v, s0 + k) }; })); return s; };
+  if (sub === 'VOL') { hist(all.map(b => b.v), (v, i) => all[i].c >= all[i].o ? 'rgba(224,38,47,.55)' : 'rgba(17,160,90,.55)'); line(sc, I.vma5, COL.ma5); line(sc, I.vma10, COL.ma10); }
+  if (sub === 'MACD') {
+    hist(I.macd, v => v >= 0 ? 'rgba(224,38,47,.7)' : 'rgba(17,160,90,.7)'); line(sc, I.dif, dark() ? '#ddd' : COL.dif); line(sc, I.dea, COL.dea);
+    for (const x of divs) { const s = sc.addLineSeries({ color: x.type === 'top' ? COL.top : COL.bot, lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+      s.setData([{ time: T(x.a), value: I.dif[x.a] }, { time: T(x.b), value: I.dif[x.b] }]); }
+  }
+  if (sub === 'KDJ') { line(sc, I.k, COL.k); line(sc, I.d, COL.d); line(sc, I.j, COL.j); }
+  if (sub === 'RSI') { const r = line(sc, I.rsi6, COL.r6); line(sc, I.rsi12, COL.r12); line(sc, I.rsi24, COL.r24);
+    r.createPriceLine({ price: 80, color: '#bbb', lineStyle: 2, lineWidth: 1, axisLabelVisible: false }); r.createPriceLine({ price: 20, color: '#bbb', lineStyle: 2, lineWidth: 1, axisLabelVisible: false }); }
+  // 两图联动
+  let lock = false; const sync = (a, b) => a.timeScale().subscribeVisibleLogicalRangeChange(r => { if (lock || !r) return; lock = true; b.timeScale().setVisibleLogicalRange(r); lock = false; });
+  sync(c, sc); sync(sc, c);
+  const vr = { from: Math.max(0, bars.length - K_VIEW), to: bars.length + 2 };
+  const applyVr = () => { lock = true; c.timeScale().setVisibleLogicalRange(vr); sc.timeScale().setVisibleLogicalRange(vr); lock = false; };
+  applyVr(); requestAnimationFrame(applyVr);
+  // 图例
+  const span = (col, txt) => `<span style="color:${col}">${txt}</span>`;
+  const legMain = i => `${all[i].t} 收${fx2(all[i].c)} ` + ['ma5', 'ma10', 'ma20', 'ma60'].map(k => span(COL[k], k.toUpperCase() + ' ' + fx2(I[k][i]))).join(' ')
+    + (KCFG.boll ? ' ' + span(COL.boll, `BOLL ${fx2(I.boll_up[i])}/${fx2(I.boll_mid[i])}/${fx2(I.boll_low[i])}`) : '');
+  const legSub = i => sub === 'VOL' ? `VOL ${Math.round(all[i].v)} ${span(COL.ma5, 'MA5 ' + Math.round(I.vma5[i] || 0))} ${span(COL.ma10, 'MA10 ' + Math.round(I.vma10[i] || 0))}`
+    : sub === 'MACD' ? `MACD(12,26,9) ${span(dark() ? '#ddd' : COL.dif, 'DIF ' + fx2(I.dif[i], 3))} ${span(COL.dea, 'DEA ' + fx2(I.dea[i], 3))} <span class="${cls(I.macd[i])}">MACD ${fx2(I.macd[i], 3)}</span>`
+    : sub === 'KDJ' ? `KDJ(9,3,3) ${span(COL.k, 'K ' + fx2(I.k[i]))} ${span(COL.d, 'D ' + fx2(I.d[i]))} ${span(COL.j, 'J ' + fx2(I.j[i]))}`
+    : `RSI ${span(COL.r6, '6: ' + fx2(I.rsi6[i]))} ${span(COL.r12, '12: ' + fx2(I.rsi12[i]))} ${span(COL.r24, '24: ' + fx2(I.rsi24[i]))}`;
+  const L = N - 1; $('#leg').innerHTML = legMain(L); $('#leg2').innerHTML = legSub(L);
+  const idxOf = t => { for (let i = N - 1; i >= 0; i--) if (all[i].t === t) return i; return L; };
+  const onMove = p => { const i = p && p.time ? idxOf(p.time) : L; $('#leg').innerHTML = legMain(i); $('#leg2').innerHTML = legSub(i); };
+  c.subscribeCrosshairMove(onMove); sc.subscribeCrosshairMove(onMove);
+  const recent = I.div.filter(x => x.b >= N - 60 && x.confirm <= L);
+  $('#indsum').innerHTML = `<b>最新（${all[L].t}）</b> MACD ${fx2(I.dif[L], 3)}/${fx2(I.dea[L], 3)}/${fx2(I.macd[L], 3)} · KDJ ${fx2(I.k[L])}/${fx2(I.d[L])}/${fx2(I.j[L])} · RSI ${fx2(I.rsi6[L])}/${fx2(I.rsi12[L])}/${fx2(I.rsi24[L])} · BOLL ${fx2(I.boll_up[L])}/${fx2(I.boll_mid[L])}/${fx2(I.boll_low[L])}<br>
+    近 60 根背离：${recent.length ? recent.map(x => `${x.type === 'top' ? span(COL.top, '顶背离') : span(COL.bot, '底背离')} ${T(x.a).slice(5)}→${T(x.b).slice(5)}`).join('，') : '无'}<br>
+    ${span('#e0262f', '▼')} 超买（RSI6≥80 且 J≥100）${span('#11a05a', '▲')} 超卖（RSI6≤20 且 J≤0），连续只标首日。信号滞后确认（5根K线）。<br>
+    日K为腾讯前复权，取 ${N} 根用于指标预热，显示最近 ${bars.length} 根。${N < 60 ? '<b>K线不足，部分指标不可靠。</b>' : ''}`;
+}

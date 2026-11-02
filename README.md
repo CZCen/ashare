@@ -27,3 +27,8 @@
 python3 scripts/export_static.py --mode snapshot --force
 cd site_build && python3 -m http.server 8000
 ```
+
+## v1.1 技术指标
+- `web/indicators.js`：纯函数指标模块（MA/EMA/MACD/KDJ/RSI/BOLL/转折点/背离/超买超卖），浏览器与 Node 通用。
+- `tools/indicators_ref.py`：Python 参考实现；`python3 tools/indicators_ref.py` 打印 5 只样例股最后一根指标值。
+- `tools/check_indicators.js`：`python3 tools/indicators_ref.py --dump /tmp/ind.json && node tools/check_indicators.js /tmp/ind.json` 逐根对拍（容差 1e-6）并检查追加 K 线后已确认信号不变。
