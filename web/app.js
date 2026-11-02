@@ -98,13 +98,20 @@ async function home() {
   let d; try { d = await getJSON('data/overview.json', 50000); } catch (e) { V.innerHTML = '<div class="empty">数据加载失败，请检查网络后下拉刷新</div>'; return; }
   if (!['#/', ''].includes(location.hash)) return;
   const tr = isTrading();
+  // 数据延迟：工作日 09:30–11:30 / 13:00–15:00（北京时间），快照超过 15 分钟未更新
+  const bn = bjNow(), hm = bn.getHours() * 100 + bn.getMinutes(), wd = bn.getDay();
+  const today = `${bn.getFullYear()}-${String(bn.getMonth() + 1).padStart(2, '0')}-${String(bn.getDate()).padStart(2, '0')}`;
+  const inSess = wd > 0 && wd < 6 && ((hm >= 930 && hm < 1130) || (hm >= 1300 && hm < 1500));
+  const tsMs = Date.parse(d.ts.replace(' ', 'T') + '+08:00'); const ageMin = (Date.now() - tsMs) / 60000;
+  const stale = inSess && ageMin > 15;
+  const staleTip = stale ? (d.trade_date === today ? `快照已 ${Math.round(ageMin)} 分钟未更新` : '今日快照尚未生成（或今日休市）') : '';
   header('板块总览', false, `<span class="live ${tr ? '' : 'stale'}"></span>${tr ? '盘中' : '收盘'}`);
   const [up, flat, down, zt, dt] = d.breadth, tot = up + down + flat || 1;
   const boards = objRows({ cols: d.cols, rows: d.boards[state.type] }); const isGn = state.type === 'gn'; const kw = state.kw.trim();
   let shown = kw ? boards.filter(x => x.name.includes(kw)) : boards;
   if (isGn && !kw && !state.showAll) shown = [...boards.slice(0, 20), ...boards.slice(Math.max(20, boards.length - 10))];
   const idx = d.idx.filter(i => ['sh000001', 'sz399001', 'sz399006'].includes(i[0]));
-  V.innerHTML = `<div class="upd">数据更新：${d.ts}（交易日 ${d.trade_date}）${tr ? ' · 每 5 分钟更新' : ''}</div>
+  V.innerHTML = `<div class="upd">数据更新：${d.ts}（交易日 ${d.trade_date}）${stale ? ` <span class="badge-stale" title="${staleTip}">数据延迟</span>` : (tr ? ' · 每 5 分钟更新' : '')}${stale ? `<br><small>${staleTip}；板块页/个股页的价格为实时行情</small>` : ''}</div>
   <div class="card"><div class="idx">${idx.map(i => `<div><small>${esc(i[1])}</small><b class="${cls(i[3])}">${i[2]?.toFixed(2)}</b><small class="${cls(i[3])}">${pctS(i[3])}</small></div>`).join('')}</div>
    <div class="breadth"><span class="up">上涨 ${up}</span><span>平 ${flat}</span><span class="down">下跌 ${down}</span><span class="up">涨停 ${zt}</span><span class="down">跌停 ${dt}</span></div>
    <div class="bar"><i style="width:${up / tot * 100}%;background:var(--up)"></i><i style="width:${flat / tot * 100}%;background:var(--flat)"></i><i style="width:${down / tot * 100}%;background:var(--down)"></i></div></div>
