@@ -182,6 +182,7 @@ async function boardView(id) {
 // ---------- 个股 ----------
 const WL = { get: () => JSON.parse(localStorage.getItem('wl') || '[]'), set: v => localStorage.setItem('wl', JSON.stringify(v)) };
 async function stockView(code) {
+  loadLwc().catch(() => {}); // 与行情并行预取图表库，不阻塞页面
   setTab(''); header('个股', true, ''); V.innerHTML = '<div class="empty">加载中…</div>';
   const [qm, sx, fx] = await Promise.all([liveQuotes([code]), getJSON('data/stocks.json', 300000).catch(() => null), getJSON('data/features.json', 300000).catch(() => null)]);
   const x = qm[code]; const si = sx ? sx.rows.find(r => r[0] === code) : null; const fr = fx ? fx.rows.find(r => r[0] === code) : null;
@@ -207,6 +208,32 @@ async function stockView(code) {
   V.querySelectorAll('[data-c]').forEach(b => b.onclick = () => { V.querySelectorAll('[data-c]').forEach(z => z.classList.toggle('on', z === b)); drawChart(code, b.dataset.c, q.prev); });
   drawChart(code, 'min', q.prev);
 }
+
+// ---------- 图表库按需加载：首屏不加载 lwc.js，打开个股图表时才注入 ----------
+const LWC_SRC = 'lwc.js';
+let lwcEl = null, lwcFailed = false;
+function loadLwc(ms = 15000) {
+  return new Promise((res, rej) => {
+    if (window.LightweightCharts) return res();
+    if (!lwcEl || lwcFailed) { if (lwcEl) lwcEl.remove(); lwcFailed = false; lwcEl = document.createElement('script'); lwcEl.src = LWC_SRC; lwcEl.async = true;
+      lwcEl.addEventListener('error', () => { lwcFailed = true; }); document.head.appendChild(lwcEl); }
+    const to = setTimeout(() => rej(new Error('timeout')), ms);
+    lwcEl.addEventListener('load', () => { clearTimeout(to); window.LightweightCharts ? res() : rej(new Error('load')); }, { once: true });
+    lwcEl.addEventListener('error', () => { clearTimeout(to); rej(new Error('error')); }, { once: true });
+  });
+}
+async function chartReady(el, my, redraw) { // 成功返回 true；超时/失败显示重试，稍后加载成功会自动重画
+  if (window.LightweightCharts) return true;
+  el.innerHTML = '<div class="empty">图表加载中…</div>';
+  try { await loadLwc(); return my === drawSeq; }
+  catch (e) {
+    if (my !== drawSeq) return false;
+    el.innerHTML = `<div class="empty">图表组件${e.message === 'timeout' ? '加载超时（网络较慢）' : '加载失败'}<br><button class="btn" id="lwcRetry" style="margin-top:8px">重试</button></div>`;
+    const b = el.querySelector('#lwcRetry'); if (b) b.onclick = () => redraw();
+    if (lwcEl && !lwcFailed) lwcEl.addEventListener('load', () => { if (my === drawSeq && window.LightweightCharts) redraw(); }, { once: true });
+    return false;
+  }
+}
 let chart = null;
 const dark = () => matchMedia('(prefers-color-scheme: dark)').matches;
 function mkChart(el, opt) {
@@ -216,11 +243,14 @@ function mkChart(el, opt) {
     handleScale: { axisPressedMouseMove: false }, localization: { locale: 'zh-CN' } });
   return chart;
 }
+let drawSeq = 0;
 async function drawChart(code, kind, prev) {
-  const el = $('#ch'); el.innerHTML = ''; $('#leg').textContent = '';
+  const my = ++drawSeq; const el = $('#ch'); $('#leg').textContent = '';
+  if (!(await chartReady(el, my, () => drawChart(code, kind, prev)))) return;
+  el.innerHTML = '';
   try {
     if (kind === 'min') {
-      const j = await ifzq('/appstock/app/minute/query?code=' + code, 'mq'); const dd = j.data[code].data;
+      const j = await ifzq('/appstock/app/minute/query?code=' + code, 'mq'); if (my !== drawSeq) return; const dd = j.data[code].data;
       const ymd = dd.date; const base = Date.UTC(+ymd.slice(0, 4), +ymd.slice(4, 6) - 1, +ymd.slice(6, 8)) / 1000;
       let pv = 0, pa = 0; const pts = dd.data.map(l => { const [hm, p, cv, ca] = l.split(' '); const o = { t: base + (+hm.slice(0, 2)) * 3600 + (+hm.slice(2)) * 60, p: +p, v: +cv - pv, a: +ca - pa }; pv = +cv; pa = +ca; return o; });
       const c = mkChart(el, { timeVisible: true, secondsVisible: false });
