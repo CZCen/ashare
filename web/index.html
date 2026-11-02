@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="板块分析">
+<meta name="theme-color" content="#c81e28">
+<meta name="referrer" content="no-referrer">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" href="icon-192.png">
+<link rel="manifest" href="manifest.json">
+<link rel="stylesheet" href="style.css?v=3">
+<title>A股板块分析</title>
+</head>
+<body>
+<header id="hdr"><button id="back" onclick="history.back()">‹</button><h1 id="title">板块总览</h1><span id="hdrR"></span></header>
+<main id="view"><div class="empty">加载中…</div></main>
+<nav id="tabs">
+ <a href="#/" data-t="home">板块</a>
+ <a href="#/screen" data-t="screen">选股</a>
+ <a href="#/watch" data-t="watch">自选</a>
+</nav>
+<script defer src="lwc.js"></script>
+<script defer src="app.js?v=3"></script>
+</body>
+</html>

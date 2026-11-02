@@ -1,0 +1,83 @@
+name: 更新行情并发布
+
+on:
+  schedule:
+    # 盘中：北京时间 09:25–15:05 每 5 分钟（UTC 01:25–07:05）；脚本自身再按北京时间过滤
+    - cron: "*/5 1-7 * * 1-5"
+    # 收盘后：北京时间 15:35 / 16:20 / 18:00 重建日线历史与选股特征（后两次为补偿，已完成则跳过）
+    - cron: "35 7 * * 1-5"
+    - cron: "20 8 * * 1-5"
+    - cron: "0 10 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "auto / snapshot / eod / bootstrap"
+        default: "auto"
+      force:
+        description: "忽略交易时间/已处理判断，强制导出并发布（true/false）"
+        default: "true"
+
+permissions:
+  contents: write   # 把 state/ 推到 data 分支
+  pages: write
+  id-token: write
+
+concurrency:
+  group: ashare-update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 取回上次的数据状态（data 分支）
+        run: |
+          if git fetch --depth=1 origin data 2>/dev/null; then
+            rm -rf state && mkdir state
+            git --work-tree=state checkout FETCH_HEAD -- . && git reset -q
+            echo "已从 data 分支恢复 state/"; ls -la state
+          else
+            echo "没有 data 分支，使用仓库内的 state/ 种子"
+          fi
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 导出静态数据
+        id: export
+        env:
+          TZ: Asia/Shanghai
+        run: |
+          MODE="${{ github.event.inputs.mode || 'auto' }}"
+          ARGS="--mode $MODE"
+          if [ "${{ github.event.inputs.force }}" = "true" ]; then ARGS="$ARGS --force"; fi
+          python3 scripts/export_static.py $ARGS
+
+      - name: 保存数据状态到 data 分支
+        if: steps.export.outputs.save_state == 'true'
+        run: |
+          cd state
+          git init -q -b data
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A && git commit -qm "data $(date +%F_%H%M)"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" data
+          rm -rf .git
+
+      - name: 上传站点
+        if: steps.export.outputs.deploy == 'true'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site_build
+
+      - name: 发布到 GitHub Pages
+        id: deploy
+        if: steps.export.outputs.deploy == 'true'
+        uses: actions/deploy-pages@v4
