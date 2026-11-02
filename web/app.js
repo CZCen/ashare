@@ -21,7 +21,8 @@ const hms = d => d.toTimeString().slice(0, 8);
 const cache = {};
 async function getJSON(path, ttlMs = 0) {
   const c = cache[path]; if (c && (Date.now() - c.t < ttlMs)) return c.v;
-  const r = await fetch(path + '?t=' + Math.floor(Date.now() / 60000), { cache: 'no-store' }); // 每分钟一个缓存键，绕过 CDN 旧缓存
+  const pre = window.__pre && window.__pre[path]; if (pre) delete window.__pre[path]; // index.html 已预加载：同一 URL、默认缓存模式才能复用预加载响应
+  const r = await fetch(path + '?t=' + (pre || Math.floor(Date.now() / 60000)), pre ? {} : { cache: 'no-store' }); // 每分钟一个缓存键，绕过 CDN 旧缓存
   if (!r.ok) throw new Error('HTTP ' + r.status);
   const v = await r.json(); cache[path] = { t: Date.now(), v }; return v;
 }

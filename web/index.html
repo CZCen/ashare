@@ -13,6 +13,9 @@
 <link rel="icon" href="icon-192.png">
 <link rel="manifest" href="manifest.json">
 <link rel="stylesheet" href="style.css?v=4">
+<script>/* 首屏数据与 app.js 并行下载：预加载 overview.json（与 app.js 的 fetch 同一 URL/模式，可直接复用） */
+(function () { var t = Math.floor(Date.now() / 60000), l = document.createElement('link'); l.rel = 'preload'; l.as = 'fetch'; l.crossOrigin = 'anonymous';
+  l.href = 'data/overview.json?t=' + t; document.head.appendChild(l); window.__pre = { 'data/overview.json': t }; })();</script>
 <title>A股板块分析</title>
 </head>
 <body>
@@ -23,6 +26,6 @@
  <a href="#/screen" data-t="screen">选股</a>
  <a href="#/watch" data-t="watch">自选</a>
 </nav>
-<script defer src="app.js?v=5"></script>
+<script defer src="app.js?v=6"></script>
 </body>
 </html>
