@@ -282,10 +282,19 @@ def board_stats(boards, q):
     for k in out: out[k].sort(key=lambda r: -r[2])
     return out
 
+def inline_css(out):
+    """把 style.css 内联进 index.html，首屏少一次往返（源码仍保留独立的 style.css，SW 缓存清单不变）。"""
+    ip, cp = os.path.join(out, "index.html"), os.path.join(out, "style.css")
+    html, css = open(ip, encoding="utf-8").read(), open(cp, encoding="utf-8").read()
+    new, n = re.subn(r'<link rel="stylesheet" href="style\.css[^"]*">', lambda m: "<style>\n" + css.strip() + "\n</style>", html)
+    if n != 1: raise RuntimeError("index.html 中未找到 style.css 链接")
+    open(ip, "w", encoding="utf-8").write(new)
+
 def export(stocks, boards, q, idx, td, mf, feat, meta):
     ts = now().strftime("%Y-%m-%d %H:%M:%S")
     if os.path.exists(OUT): shutil.rmtree(OUT)
     shutil.copytree(WEB, OUT)
+    inline_css(OUT)
     D = os.path.join(OUT, "data")
     feat_new = {r[0]: r[4] for r in (feat or {}).get("rows", [])}
     up = down = flat = zt = dtn = 0
