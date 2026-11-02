@@ -57,20 +57,43 @@ def divergences(h, l, dif, w=5, gap=60):
     for a, b in zip(lo, lo[1:]):
         if b - a <= gap and l[b] < l[a] and dif[b] > dif[a] and dif[a] < 0 and dif[b] < 0: out.append(dict(type="bottom", a=a, b=b, confirm=b + w))
     return sorted(out, key=lambda x: (x["b"], x["type"]))
-def extremes(r6, j):
-    out, pob, pos = [], False, False
+def limit_pct(code, name=""):
+    if code.startswith("bj"): return 0.30
+    if code.startswith(("sz30", "sh68")): return 0.20
+    if name.startswith("S") and not name.upper().startswith("ST"): return 0.05
+    return 0.10
+def limits(prev, code, name=""):
+    p = limit_pct(code, name); u = prev * (1 + p) * 100; d = prev * (1 - p) * 100
+    if code.startswith("bj"): return math.floor(u + 1e-7) / 100, math.ceil(d - 1e-7) / 100
+    return math.floor(u + 0.5 + 1e-7) / 100, math.floor(d + 0.5 + 1e-7) / 100
+def yizi(h, l, c, code, name=""):
+    up, dn = [], []
+    for i in range(len(c)):
+        if i == 0 or h[i] != l[i]: up.append(False); dn.append(False); continue
+        lu, ld = limits(c[i - 1], code, name); up.append(abs(c[i] - lu) <= 0.005); dn.append(abs(c[i] - ld) <= 0.005)
+    return up, dn
+def extremes(r6, j, yu=None, yd=None):
+    """连续满足只标首个非一字日；一字涨停不标超买、一字跌停不标超卖。返回 (标记, 被抑制)"""
+    out, supp, pob, pos, mob, mos = [], [], False, False, False, False
     for i in range(len(j)):
         ob = r6[i] is not None and r6[i] >= 80 and j[i] >= 100; os_ = r6[i] is not None and r6[i] <= 20 and j[i] <= 0
-        if ob and not pob: out.append(dict(type="overbought", i=i))
-        if os_ and not pos: out.append(dict(type="oversold", i=i))
+        if ob and not pob: mob = False
+        if os_ and not pos: mos = False
+        if ob and not mob:
+            if yu and yu[i]: supp.append(dict(type="overbought", i=i))
+            else: out.append(dict(type="overbought", i=i)); mob = True
+        if os_ and not mos:
+            if yd and yd[i]: supp.append(dict(type="oversold", i=i))
+            else: out.append(dict(type="oversold", i=i)); mos = True
         pob, pos = ob, os_
-    return out
-def compute(bars):
+    return out, supp
+def compute(bars, code="", name=""):
     h = [b["h"] for b in bars]; l = [b["l"] for b in bars]; c = [b["c"] for b in bars]; v = [b["v"] for b in bars]
     dif, dea, bar = macd(c); K, D, J = kdj(h, l, c); up, mid, low = boll(c); r6 = rsi(c, 6)
+    yu, yd = yizi(h, l, c, code, name); ext, supp = extremes(r6, J, yu, yd)
     return dict(ma5=ma(c, 5), ma10=ma(c, 10), ma20=ma(c, 20), ma60=ma(c, 60), vma5=ma(v, 5), vma10=ma(v, 10), dif=dif, dea=dea, macd=bar,
                 k=K, d=D, j=J, rsi6=r6, rsi12=rsi(c, 12), rsi24=rsi(c, 24), boll_up=up, boll_mid=mid, boll_low=low,
-                div=divergences(h, l, dif), ext=extremes(r6, J))
+                div=divergences(h, l, dif), ext=ext, supp=supp)
 
 if __name__ == "__main__":
     args = sys.argv[1:]; dump = None
@@ -78,9 +101,9 @@ if __name__ == "__main__":
     codes = args or SAMPLES; res = {}
     print("代码      日期        DIF      DEA      MACD     K       D       J       RSI6    RSI12   RSI24   BOLL上   BOLL中   BOLL下")
     for code in codes:
-        bars = fetch(code); r = compute(bars); res[code] = dict(bars=bars, ind=r); i = len(bars) - 1
+        bars = fetch(code); r = compute(bars, code); res[code] = dict(bars=bars, ind=r); i = len(bars) - 1
         f = lambda k, p=3: f"{r[k][i]:.{p}f}"
         print(f"{code} {bars[i]['t']} {f('dif')} {f('dea')} {f('macd')} {f('k',2)} {f('d',2)} {f('j',2)} {f('rsi6',2)} {f('rsi12',2)} {f('rsi24',2)} {f('boll_up',2)} {f('boll_mid',2)} {f('boll_low',2)}"
-              f"  (共{len(bars)}根, 背离{len(r['div'])}个, 超买超卖{len(r['ext'])}个)")
+              f"  (共{len(bars)}根, 背离{len(r['div'])}个, 超买超卖{len(r['ext'])}个, 一字抑制{len(r['supp'])}个)")
     if dump:
         json.dump(res, open(dump, "w"), ensure_ascii=False); print("已导出", dump)

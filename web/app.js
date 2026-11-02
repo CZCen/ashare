@@ -332,7 +332,7 @@ async function drawDayK(code, el, my) {
   const j = await ifzq(`/appstock/app/fqkline/get?param=${code},day,,,${K_FETCH},qfq`, 'kq'); if (my !== drawSeq) return; const dd = j.data[code];
   const all = (dd.qfqday || dd.day || []).map(b => ({ t: b[0], o: +b[1], c: +b[2], h: +b[3], l: +b[4], v: +b[5] }));
   if (!all.length) throw new Error('无日K数据');
-  const I = IND.all(all); const N = all.length, s0 = Math.max(0, N - K_SHOW); const bars = all.slice(s0);
+  const I = IND.all(all, { code, name: (document.querySelector('#title') || {}).textContent || '' }); const N = all.length, s0 = Math.max(0, N - K_SHOW); const bars = all.slice(s0);
   const T = i => all[i].t; const pts = (arr) => bars.map((b, k) => arr[s0 + k] == null ? { time: b.t } : { time: b.t, value: arr[s0 + k] });
   const c = mkChart(el, { rightOffset: 3 });
   const cs = c.addCandlestickSeries({ upColor: '#e0262f', downColor: '#11a05a', borderUpColor: '#e0262f', borderDownColor: '#11a05a', wickUpColor: '#e0262f', wickDownColor: '#11a05a', priceLineVisible: false });
@@ -395,6 +395,6 @@ async function drawDayK(code, el, my) {
   const recent = I.div.filter(x => x.b >= N - 60 && x.confirm <= L);
   $('#indsum').innerHTML = `<b>最新（${all[L].t}）</b> MACD ${fx2(I.dif[L], 3)}/${fx2(I.dea[L], 3)}/${fx2(I.macd[L], 3)} · KDJ ${fx2(I.k[L])}/${fx2(I.d[L])}/${fx2(I.j[L])} · RSI ${fx2(I.rsi6[L])}/${fx2(I.rsi12[L])}/${fx2(I.rsi24[L])} · BOLL ${fx2(I.boll_up[L])}/${fx2(I.boll_mid[L])}/${fx2(I.boll_low[L])}<br>
     近 60 根背离：${recent.length ? recent.map(x => `${x.type === 'top' ? span(COL.top, '顶背离') : span(COL.bot, '底背离')} ${T(x.a).slice(5)}→${T(x.b).slice(5)}`).join('，') : '无'}<br>
-    ${span('#e0262f', '▼')} 超买（RSI6≥80 且 J≥100）${span('#11a05a', '▲')} 超卖（RSI6≤20 且 J≤0），连续只标首日。信号滞后确认（5根K线）。<br>
+    ${span('#e0262f', '▼')} 超买（RSI6≥80 且 J≥100）${span('#11a05a', '▲')} 超卖（RSI6≤20 且 J≤0），连续只标首日；一字涨停不标超买、一字跌停不标超卖。信号滞后确认（5根K线）。<br>
     日K为腾讯前复权，取 ${N} 根用于指标预热，显示最近 ${bars.length} 根。${N < 60 ? '<b>K线不足，部分指标不可靠。</b>' : ''}`;
 }
