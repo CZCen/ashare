@@ -354,7 +354,7 @@ def main():
     elif mode == "auto": mode = "eod" if hm >= 1530 else "snapshot"
     meta["mode"] = mode; log("mode", mode)
     save_state = False
-    if mode == "snapshot" and not a.force and (t.weekday() >= 5 or hm < 920 or 1135 < hm < 1255 or hm > 1510):
+    if mode == "snapshot" and not a.force and (t.weekday() >= 5 or hm < 925 or 1135 < hm < 1255 or hm > 1510):
         log("非交易时段，跳过"); gh_out(deploy=False, save_state=False); return
     if mode == "eod" and not a.force and meta.get("eod_date") == today:
         log("今日收盘数据已处理，跳过"); gh_out(deploy=False, save_state=False); return
@@ -366,6 +366,8 @@ def main():
     if not q or not td: log("快照失败"); gh_out(deploy=False, save_state=save_state); sys.exit(0 if save_state else 1)
     if mode == "snapshot" and td != today and not a.force:
         log("今天不是交易日（最新交易日 %s），跳过" % td); gh_out(deploy=False, save_state=False); return
+    if mode == "snapshot" and sum(1 for x in q.values() if x.get("vol")) < 100:
+        log("盘前/空快照（有成交的股票不足 100 只），不覆盖已发布的数据"); gh_out(deploy=False, save_state=False); return
     mf = moneyflow()
     if mf: meta["mf_date"] = td
     if mode in ("eod", "bootstrap"):

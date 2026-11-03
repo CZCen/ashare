@@ -106,7 +106,7 @@ async function home() {
   const tsMs = Date.parse(d.ts.replace(' ', 'T') + '+08:00'); const ageMin = (Date.now() - tsMs) / 60000;
   const stale = inSess && ageMin > 15;
   const staleTip = stale ? (d.trade_date === today ? `快照已 ${Math.round(ageMin)} 分钟未更新` : '今日快照尚未生成（或今日休市）') : '';
-  header('板块总览', false, `<span class="live ${tr ? '' : 'stale'}"></span>${tr ? '盘中' : '收盘'}`);
+  header('板块总览', false, `<span class="live ${tr ? '' : 'stale'}"></span>${tr ? '盘中' : d.trade_date.slice(5) + ' 收盘'}`);
   const [up, flat, down, zt, dt] = d.breadth, tot = up + down + flat || 1;
   const boards = objRows({ cols: d.cols, rows: d.boards[state.type] }); const isGn = state.type === 'gn'; const kw = state.kw.trim();
   let shown = kw ? boards.filter(x => x.name.includes(kw)) : boards;
